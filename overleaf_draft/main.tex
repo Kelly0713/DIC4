@@ -1,0 +1,396 @@
+\documentclass[conference]{IEEEtran}
+
+% ----------------------------------------------------------------------
+% XeLaTeX + Traditional Chinese Configuration (Overleaf ready)
+% ----------------------------------------------------------------------
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\IfFontExistsTF{Noto Serif CJK TC Light}{
+  \IfFontExistsTF{Noto Serif CJK TC Bold}{
+    \setCJKmainfont{Noto Serif CJK TC Light}[BoldFont={Noto Serif CJK TC Bold}]
+  }{
+    \setCJKmainfont{Noto Serif CJK TC Light}
+  }
+  \setCJKsansfont{Noto Sans CJK TC}
+  \setCJKmonofont{Noto Sans Mono CJK TC}
+}{
+  \IfFontExistsTF{Noto Serif CJK TC}{
+    \setCJKmainfont{Noto Serif CJK TC}
+    \setCJKsansfont{Noto Sans CJK TC}
+    \setCJKmonofont{Noto Sans Mono CJK TC}
+  }{
+    \IfFontExistsTF{Microsoft JhengHei}{
+      \setCJKmainfont{PMingLiU}
+      \setCJKsansfont{Microsoft JhengHei}
+      \setCJKmonofont{Microsoft JhengHei}
+    }{
+      \setCJKmainfont{FandolSong-Regular}
+      \setCJKsansfont{FandolHei-Regular}
+    }
+  }
+}
+\XeTeXlinebreaklocale "zh"
+\XeTeXlinebreakskip = 0pt plus 1pt
+\xeCJKsetup{CJKglue=\hskip 0.06em plus 0.08em minus 0.02em}
+\linespread{1.16}
+\setlength{\parskip}{2pt plus 1pt}
+
+% ----------------------------------------------------------------------
+% Standard IEEE & Technical Packages
+% ----------------------------------------------------------------------
+\usepackage{cite}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{multirow}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit,backgrounds}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
+
+\renewcommand{\algorithmicrequire}{\textbf{Input:}}
+\renewcommand{\algorithmicensure}{\textbf{Output:}}
+
+\begin{document}
+
+\title{個人化多站天氣與空氣品質行前助理：\\基於混合式規則引擎與大型語言模型之系統設計}
+
+% ----------------------------------------------------------------------
+% Placeholder Author Block (請於 Overleaf 中替換為實際作者與單位資訊)
+% ----------------------------------------------------------------------
+\author{
+  \IEEEauthorblockN{陳渝煊、周楷容、徐愷伶、江晏瑋、黃郁雯}
+  % 如需加入系所與 Email，可取消下方註解並填入：
+  % \IEEEauthorblockA{系所名稱，學校名稱\\ Email: author@example.edu.tw}
+}
+
+\maketitle
+
+\begin{abstract}
+\mdseries 氣象預報與空氣品質監測資料為民眾規劃日常活動的重要依據，然而現有政府開放資料平台多著重於單一來源數據的查詢與呈現，使用者仍須自行跨平台整合降雨機率、溫度、紫外線指數（UVI）與空氣品質指標（AQI），並依據活動情境與個人偏好進行判斷。此外，既有大型語言模型（LLM）應用於環境資訊查詢時，尚未充分驗證同時整合多源環境資料、個人偏好與日常行動建議，且兼顧資料品質揭露與判斷依據可追溯性之系統架構。為此，本研究提出「個人化天氣助理」（Personalized Weather Assistant, PWA）AI Agent 系統，針對臺灣境內多站行程提供具情境相關性且可追溯之行前建議。本系統採用混合式架構，整合交通部中央氣象署（CWA）天氣預報與環境部（MoENV）即時監測及空氣品質預報資料（\texttt{AQF\_P\_01}），先透過標準化流程完成各停留站之時空對齊與資料品質檢查，再由版本化領域規則決策引擎結合使用者偏好產生結構化建議，並嚴格區分「官方健康防護」與「主觀冷熱舒適」；最後由 LLM 在受限責任邊界內執行自然語言需求解析、分層摘要改寫與可追溯追問回答，避免幻覺或擅自修改判定結果。本研究亦設計涵蓋「僅顯示官方原始數據」、「固定規則與模板」及「混合式架構」三組比較基準與六種實務測試情境之評估方案，期能降低跨平台整合負擔，提升行前建議之個人相關性、可理解性與可追溯性。
+\end{abstract}
+
+\begin{IEEEkeywords}
+\mdseries AI Agent、個人化推薦、氣象資訊整合、空氣品質、領域知識、大型語言模型（LLM）、Model Context Protocol（MCP）
+\end{IEEEkeywords}
+
+% ======================================================================
+\section{緒論}
+% ======================================================================
+
+\subsection{研究背景與動機}
+隨著氣象觀測與環境監測技術之發展，民眾已能透過網路取得天氣預報、降雨機率與空氣品質指標（Air Quality Index, AQI）等資訊作為日常活動規劃之參考。以臺灣為例，交通部中央氣象署提供鄉鎮市區級天氣預報開放資料，環境部亦提供即時測站污染物監測與空品區預報資料，顯示多源環境資訊整合已具備完善之資料基礎。
+
+然而，取得客觀環境數據並不等同於能直接做出符合個人需求之行前決策。不同使用者對高溫、濕度、紫外線與空氣污染之主觀耐受度及關注程度存在顯著差異：例如，對悶熱敏感者需優先關注溫濕度變化、重視防曬者特別在意紫外線指數（UVI），而過敏族群則對 AQI 與特定污染物更為敏感。因此，如何在保留客觀環境事實的前提下，將分散的環境數據轉換為具體、易於理解且可執行之行前行動建議，為值得探討之重要研究問題。
+
+\subsection{問題定義與既有方法限制}
+目前使用者若欲在出發前同時評估降雨、溫度、濕度、UVI 與 AQI，往往必須切換多個政府或氣象資訊平台（如表~\ref{tab:fragmented_sources} 所示），再自行判斷是否攜帶雨具、防曬用品或配戴口罩，大幅增加行前查詢與認知整合之操作負擔。另一方面，現有通用性預報主要呈現特定區域與時段的平均環境條件，缺乏對多站行程暴露時間、活動型態及個人行動成本（例如攜帶雨具之負擔與淋雨代價）之綜合考量。
+
+\begin{table}[t]
+  \centering
+  \caption{臺灣現行官方環境資訊分散查詢來源一覽}
+  \label{tab:fragmented_sources}
+  \begin{tabularx}{\columnwidth}{@{}l l X@{}}
+    \toprule
+    \textbf{資訊類別} & \textbf{官方資料來源} & \textbf{傳統查詢限制} \\
+    \midrule
+    降雨資訊 & 中央氣象署（每日雨量） & 僅提供機率，未考量暴露情境 \\
+    溫度天氣 & 中央氣象署（鄉鎮預報） & 缺乏個人冷熱偏好加權 \\
+    紫外線 & 中央氣象署（UVI 觀測） & 指數未直接轉為防曬提示 \\
+    空氣品質 & 環境部（空品監測網） & 需另行比對主污染物與時效 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsection{研究貢獻與設計原則}
+針對上述問題，本研究設計「個人化天氣助理」（Personalized Weather Assistant）系統，預期貢獻包括：
+\begin{enumerate}
+  \item \textbf{多源環境資料時空對齊}：整合中央氣象署與環境部開放資料，依據行程停留站與時段進行時間選擇與品質標記，消除跨平台查詢負擔。
+  \item \textbf{健康防護與舒適偏好分離機制}：建立版本化領域規則引擎，確保官方健康防護提醒不會被個人主觀舒適設定任意刪除。
+  \item \textbf{受限邊界之可追溯 LLM 解釋}：將 LLM 限制於欄位解析、自然語言改寫與基於結構化證據（\texttt{evidence} 與 \texttt{limitations}）之追問回答，杜絕資料編造。
+  \item \textbf{可控偏好更新與三組對照評估設計}：透過明確偏好、行程快照與確認制偏好候選更新，並設計跨基準線之評估方案以驗證系統效益。
+\end{enumerate}
+
+本系統遵循五項核心設計原則：\textbf{資料優先}（建議源自官方資料與明確規則）、\textbf{行程分段}（逐站獨立取數與判定後再行彙整）、\textbf{健康與舒適分離}、\textbf{不確定性可見}（過期、缺漏或無預報須明確揭露限制），以及\textbf{個人化須可控制}（長期偏好須經使用者確認後更新）。
+
+% ======================================================================
+\section{相關研究與系統設計思維}
+% ======================================================================
+
+\subsection{AI 與大型語言模型技術面相關研究}
+在氣象資訊對話式應用方面，Weathernews 於 2025 年推出生成式 AI 功能「Weather Agent」~\cite{weathernews2025agent}，展現以自然語言查詢天氣、花粉與警報資訊之應用型態，惟尚未提供依個人健康耐受度調整日常建議之公開獨立評估。在結合工具呼叫與即時監測資料方面，Pan 與 Nipu~\cite{pan2025mcp_aqi} 透過 Model Context Protocol（MCP）連接 LLM 與即時空氣品質監測介面，於 6 位專家評估 15 則回答中取得平均 4.78/5 分之事實正確性，但受限於評分者一致性偏低與評估規模有限，仍不足以作為整體可靠率之唯一依據。Gao 等人~\cite{gao2025instructor_worker} 針對 2025 年洛杉磯野火空品分析提出 Instructor--Worker 多代理人架構，並以 Google Air Quality API 健康建議作為參考文本計算 BERTScore，其建議依一般族群分類（如健康成人與肺部疾病患者），亦未建立個別使用者耐受度模型。
+
+在個人化代理人架構面，Peng 等人~\cite{peng2025survey_rec_agents} 將 LLM 推薦代理人歸納為 Profile、Memory、Planning 與 Action 四大核心組件；Chen~\cite{chen2025memory_llm} 提出 Memory-Assisted LLM，依據當前查詢選擇性檢索使用者相關歷史紀錄而非輸入全部紀錄，並於電影與書籍評分任務驗證其效益，本系統之偏好記憶檢索即參考此選擇性擷取概念。在 LLM 氣象理解限制方面，Yu 等人~\cite{yu2025wximpactbench} 建立劇烈天氣社會影響評測基準 WXImpactBench，指出現階段 LLM 於氣象影響理解仍須進一步強化與獨立驗證。有鑑於此，本研究決定由規則模組處理數值門檻判斷，再由 LLM 負責解釋結果。
+
+\subsection{領域知識面相關研究}
+在個人化熱舒適建模方面，Abdulraheem 等人~\cite{abdulraheem2025pcm_rl} 提出結合長短期記憶網路（LSTM）與強化學習之 PCM-RL 模型以處理室內熱感覺與偏好之個體及時間差異；雖然室內模型不可直接外推至戶外情境，但其動態個體差異概念可作為設計參考。針對臺灣戶外熱環境，Shih 等人~\cite{shih2025taiwan_utci} 分析 1990 至 2023 年臺北與臺中逐時氣象資料與通用熱氣候指數（UTCI），發現都市熱島效應對戶外熱舒適的影響大於氣候變遷，突顯跨城市評估之必要性。
+
+在環境風險與溝通方面，Sun 等人~\cite{sun2024low_pm25} 利用美國成人健保資料進行病例時間序列研究，發現短期暴露於低於 2021 年 WHO 指引值之 PM$_{2.5}$ 仍與心血管及呼吸道就醫風險相關，支持「主觀無不適不等於零風險」之安全設計原則。在紫外線與降雨風險溝通上，Kaiser 等人~\cite{kaiser2025uvi_review} 之統合分析指出全球民眾對 UVI 之認知與實際使用程度普遍偏低，顯示指數應轉譯為具體防曬提示；Joslyn 等人~\cite{joslyn2009pop} 則發現部分民眾會將降雨機率誤解為降雨時間或面積比例，因此建議保留原始機率並提供風險導向之決策輔助。進一步地，世界氣象組織（WMO）影響導向預報指引~\cite{wmo2015impact_forecast} 強調預報服務應連結危害、暴露度與脆弱度以促成行動。針對降雨攜帶決策，本系統以簡化預期成本模型說明個人化門檻概念：當式~(\ref{eq:rain_cost}) 成立時，攜帶雨具具備較低預期成本：
+\begin{equation}
+  p \times rL > C
+  \label{eq:rain_cost}
+\end{equation}
+其中 $p$ 為與決策情境相符之遇雨機率，$C$ 為攜帶雨具之負擔成本，$L$ 為未攜帶雨具而遇雨之損失，$r$ 為攜帶雨具可避免之損失比例。
+
+\subsection{文獻摘要、研究缺口與核心專業爭論}
+表~\ref{tab:literature_summary} 彙整前述十二篇代表性文獻之研究方法與限制。綜觀既有文獻，目前仍缺乏一套經完整驗證、同時整合多源官方天氣與空品資料、結合使用者偏好檔案與暴露情境，並可追溯地轉換為日常多站行前建議之系統（Research Gap）。
+
+\begin{table*}[t]
+  \centering
+  \caption{相關文獻彙整與本研究缺口比較表}
+  \label{tab:literature_summary}
+  \begin{tabularx}{\textwidth}{@{}c l c l X X@{}}
+    \toprule
+    \textbf{文獻} & \textbf{主題／系統} & \textbf{年份} & \textbf{核心方法} & \textbf{主要發現} & \textbf{研究限制與本系統對應} \\
+    \midrule
+    \cite{weathernews2025agent} & Weathernews Agent & 2025 & 生成式 AI 對話 & 以自然語言提供天氣與花粉查詢 & 官方產品介紹，缺乏個人耐受度與獨立評估 \\
+    \cite{pan2025mcp_aqi} & 空品監測介面 & 2025 & LLM + MCP 工具 & 專家事實正確性平均 4.78/5 & 評分者一致性低、未依個人耐受度建議 \\
+    \cite{gao2025instructor_worker} & Instructor--Worker & 2025 & 多代理人 LLM & 以 BERTScore 對照官方空品建議 & 單一野火案例；依族群分類非個人化 \\
+    \cite{peng2025survey_rec_agents} & LLM 推薦綜述 & 2025 & 架構綜述 & 歸納 Profile、Memory、Planning、Action & 通用推薦領域，非氣象健康應用 \\
+    \cite{chen2025memory_llm} & Memory-Assisted LLM & 2025 & 選擇性記憶檢索 & 優於全歷史輸入 LLM 基線 & 驗證於影書評分，未驗證健康防護 \\
+    \cite{yu2025wximpactbench} & WXImpactBench & 2025 & 分類與問答評測 & 建立劇烈天氣社會影響評測基準 & 聚焦災害事件，非日常多站出門決策 \\
+    \cite{abdulraheem2025pcm_rl} & PCM-RL 熱舒適 & 2025 & LSTM + RL & 捕捉熱感覺之時間與個體差異 & 僅限室內環境，不直接代表戶外暴露 \\
+    \cite{shih2025taiwan_utci} & 臺北／臺中 UTCI & 2025 & UTCI 趨勢分析 & 都市熱島對熱舒適影響大於氣候變遷 & 比較城市差異，未建模個人耐熱度 \\
+    \cite{sun2024low_pm25} & 低濃度 PM$_{2.5}$ & 2024 & 病例時間序列 & 低於 WHO 指引仍具心肺就醫風險 & 證實低濃度非零風險，支持防護獨立性 \\
+    \cite{kaiser2025uvi_review} & UVI 系統性回顧 & 2025 & 統合分析 & 民眾對 UVI 認知與使用普遍偏低 & 需將原始指數轉譯為具體防曬行動提示 \\
+    \cite{joslyn2009pop} & 降雨機率理解 & 2009 & 心理學實驗 & 受試者常誤解降雨機率為面積或時間 & 需搭配文字說明與暴露情境減少誤判 \\
+    \cite{wmo2015impact_forecast} & WMO 影響導向指引 & 2015 & 風險溝通指引 & 強調將危害資訊連結至影響與行動 & 主要面向多重災害警報，需轉化為日常建議 \\
+    \bottomrule
+  \end{tabularx}
+\end{table*}
+
+基於文獻證據與實務限制，本系統確立三項專業爭論之設計決策：
+\begin{enumerate}
+  \item \textbf{固定規則判斷 vs. LLM 自主建議}：採混合架構，由規則處理數值門檻與防護條件，LLM 負責需求解析與結果解釋，並以固定文字模板作為基準組驗證 LLM 效益。
+  \item \textbf{統一標準 vs. 學習個人耐受度}：採「明確偏好設定優先」策略，後續即使納入回饋學習，亦僅調整舒適提醒與資訊排序，且須經使用者確認後更新版本。
+  \item \textbf{簡明行動建議 vs. 保留不確定性}：採三層式呈現——第一層顯示主要行動建議、第二層提供簡短原因、第三層可展開查看原始數值、測站來源、有效時段與資料限制。
+\end{enumerate}
+
+% ======================================================================
+\section{系統架構與方法設計}
+% ======================================================================
+
+\subsection{系統範圍與多站行程情境}
+使用者建立一份多站行程時，每站包含地點、停留時間區間、活動型態與戶外暴露程度。例如：
+\begin{itemize}
+  \item \texttt{09:00--12:00}：臺中市南區 $\mid$ 步行上課 $\mid$ 一般戶外暴露
+  \item \texttt{14:00--17:00}：彰化市 $\mid$ 戶外活動 $\mid$ 長時間戶外暴露
+  \item \texttt{19:00--21:00}：臺中市南區 $\mid$ 騎車返家 $\mid$ 一般戶外暴露
+\end{itemize}
+本系統範圍聚焦於使用者指定之各停留站與活動時段，不另行推估跨縣市移動路徑（如臺中至彰化途中）之動態路況。
+
+\subsection{十一模組系統架構}
+系統整體流程如圖~\ref{fig:system_architecture} 所示，由十一個職責分離之模組構成（詳細輸入輸出如表~\ref{tab:modules}）。透過模組化拆解，系統可確保從使用者輸入、資料檢索對齊、規則判定到 LLM 自然語言解釋皆具備清楚之資料流邊界。
+
+\begin{figure*}[t]
+  \centering
+  \begin{tikzpicture}[
+    node distance=0.45cm and 0.42cm,
+    box/.style={rectangle, rounded corners=3pt, draw=blue!60!black, fill=blue!5, text width=2.05cm, align=center, font=\footnotesize, minimum height=1.05cm},
+    store/.style={rectangle, rounded corners=3pt, draw=teal!60!black, fill=teal!6, text width=3.8cm, align=center, font=\footnotesize, minimum height=0.95cm},
+    fb/.style={rectangle, rounded corners=3pt, draw=orange!70!black, fill=orange!8, text width=3.4cm, align=center, font=\footnotesize, minimum height=0.95cm},
+    arr/.style={-{Stealth[length=2mm]}, thick, draw=gray!70!black},
+    dasharr/.style={-{Stealth[length=2mm]}, thick, dashed, draw=teal!70!black},
+    fbarr/.style={-{Stealth[length=2mm]}, thick, draw=orange!70!black}
+  ]
+    % Row 1: M1 -> M2 -> M3 -> M5 -> M6
+    \node[box] (m1) {\textbf{[M1] 使用者介面}\\行程與偏好輸入};
+    \node[box, right=of m1] (m2) {\textbf{[M2] 需求解析}\\表單／自然語言};
+    \node[box, right=of m2] (m3) {\textbf{[M3] 時空標準化}\\行政區／空品區};
+    \node[box, right=of m3] (m5) {\textbf{[M5] 資料取得}\\CWA／MoENV};
+    \node[box, right=of m5] (m6) {\textbf{[M6] 品質與對齊}\\Snapshot 檢查};
+
+    % Row 2: M7 -> M8 -> M9 -> M10 (right to left)
+    \node[box, below=0.8cm of m6] (m7) {\textbf{[M7] 規則決策引擎}\\版本化判定};
+    \node[box, below=0.8cm of m5] (m8) {\textbf{[M8] 行程彙整器}\\排序與去重};
+    \node[box, below=0.8cm of m3] (m9) {\textbf{[M9] LLM 解釋}\\摘要與追問};
+    \node[box, below=0.8cm of m2] (m10) {\textbf{[M10] 分層呈現}\\證據與限制};
+
+    % Row 3: M4 (left) and M11 (right)
+    \node[store, below=2.65cm of m1, anchor=north west, xshift=-0.2cm] (m4) {\textbf{[M4] 帳號、偏好與記憶管理}\\UserProfile 與行程快照};
+    \node[fb, below=0.9cm of m8] (m11) {\textbf{[M11] 行後問卷與偏好候選}\\FeedbackRecord};
+
+    % Main flow arrows
+    \draw[arr] (m1) -- (m2);
+    \draw[arr] (m2) -- (m3);
+    \draw[arr] (m3) -- (m5);
+    \draw[arr] (m5) -- (m6);
+    \draw[arr] (m6) -- (m7);
+    \draw[arr] (m7) -- (m8);
+    \draw[arr] (m8) -- (m9);
+    \draw[arr] (m9) -- (m10);
+
+    % Support dashed arrows
+    \draw[dasharr] (m4.north -| m1.south) -- (m1.south);
+    \draw[dasharr] (m4.south) -- ++(0,-0.32) -| (m7.south);
+
+    % Feedback arrows
+    \draw[fbarr] (m10.south) -- ++(0,-0.25) -| (m11.north);
+    \draw[fbarr] (m11.west) -- node[above, font=\scriptsize]{確認後更新} (m4.east);
+  \end{tikzpicture}
+  \caption{個人化天氣助理（PWA）十一模組混合式系統架構與回饋迴圈圖}
+  \label{fig:system_architecture}
+\end{figure*}
+
+\begin{table*}[t]
+  \centering
+  \caption{系統模組職責與資料介面說明}
+  \label{tab:modules}
+  \begin{tabularx}{\textwidth}{@{}c l X l l@{}}
+    \toprule
+    \textbf{編號} & \textbf{模組名稱} & \textbf{核心職責} & \textbf{主要輸入} & \textbf{主要輸出} \\
+    \midrule
+    M1 & 使用者介面 & 建立／編輯多站行程並分層呈現結果 & 地點、時間、活動、偏好 & 行程請求與互動畫面 \\
+    M2 & 行程與需求解析 & 解析表單或自然語言補充欄位 & 使用者輸入 & 行程段草稿 \\
+    M3 & 地點與時段標準化 & 驗證臺灣地點並轉成座標／行政區／空品區 & 行程段草稿 & \texttt{ItinerarySegment} \\
+    M4 & 帳號、偏好與記憶管理 & 保存明確偏好、快照、問卷與待確認候選 & 帳號與確認後回饋 & \texttt{UserProfile}、歷史紀錄 \\
+    M5 & 氣象與空品資料取得 & 呼叫 CWA 與 MoENV 官方開放資料來源 & 標準化行程段 & 原始環境資料與 Metadata \\
+    M6 & 資料品質與時空對齊 & 比對時段、發布時間、空間粒度、測站距離 & 原始資料、行程段 & \texttt{EnvironmentalSnapshot} \\
+    M7 & 規則決策引擎 & 依版本化領域規則與偏好產生結構化建議 & 環境快照、行程段、偏好 & \texttt{SegmentDecision} \\
+    M8 & 行程建議彙整器 & 排序跨站風險、合併重複提醒並保留依據 & 多個 \texttt{SegmentDecision} & \texttt{TripRecommendation} \\
+    M9 & LLM 解釋與追問處理 & 改寫既有決策為摘要並回答「為什麼」 & 結構化決策紀錄 & 解釋文字（不可新增判定） \\
+    M10 & 結果、證據與限制呈現 & 分層呈現總結、分段提醒、原始值與限制 & \texttt{TripRecommendation} & 使用者可讀結果 \\
+    M11 & 行後問卷與偏好候選 & 蒐集符合度回饋並產生待確認調整候選 & 問卷、歷史紀錄 & \texttt{FeedbackRecord}、候選更新 \\
+    \bottomrule
+  \end{tabularx}
+\end{table*}
+
+\subsection{官方資料策略、時間選擇規則與資料模型}
+系統整合三類官方資料（如表~\ref{tab:data_sources}）：中央氣象署鄉鎮市區天氣預報（溫度、相對濕度、降雨機率、紫外線與天氣描述）、環境部即時空品測站監測（AQI、主要污染物與測站座標），以及環境部 \texttt{AQF\_P\_01} 空品區隔日預報。系統嚴格禁止將空品區層級之隔日預報標示為單一測站或單一小時間觀測值。
+
+\begin{table}[t]
+  \centering
+  \caption{官方資料來源與時空對齊規格}
+  \label{tab:data_sources}
+  \begin{tabularx}{\columnwidth}{@{}l l l X@{}}
+    \toprule
+    \textbf{類型} & \textbf{官方來源} & \textbf{對齊單位} & \textbf{使用時機與必顯資訊} \\
+    \midrule
+    天氣預報 & 中央氣象署 & 鄉鎮／時段 & 未來站；顯示鄉鎮、起訖、發布時間 \\
+    即時空品 & 環境部測站 & 最近測站 & 進行中；顯示測站、距離、主污染物 \\
+    空品預報 & 環境部 \texttt{AQF\_P\_01} & 空品區／日 & 隔日預報；顯示空品區、主污染物 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+在時間選擇規則上：
+\begin{enumerate}
+  \item 若行程段正在進行或屬於當前時段，使用最近可用測站即時空品資料；
+  \item 若行程段落在官方隔日預報範圍，使用空品區隔日預報；
+  \item 若行程段超出官方空品預報範圍，仍提供天氣建議，空品顯示「尚無官方預報」且不產生空品風險判定；
+  \item 若發布時間、有效時段或地點無法對齊，強制標示限制，不得補值或推測。
+\end{enumerate}
+
+系統定義六個核心資料結構以維持模組解耦與可追溯性：
+\begin{itemize}
+  \item \texttt{UserProfile}：含 \texttt{userId}、明確偏好 \texttt{explicitPreferences}（\texttt{rainTolerance}、\texttt{sunProtectionPriority}、\texttt{airQualityAlertSensitivity}、\texttt{thermalPreference}）及 \texttt{confirmedPreferenceVersion}。
+  \item \texttt{ItinerarySegment}：含 \texttt{segmentId}、\texttt{itineraryId}、\texttt{placeName}、經緯度、\texttt{township}、\texttt{airQualityArea}、\texttt{startTime}、\texttt{endTime}、\texttt{activityType} 與 \texttt{outdoorExposureLevel}。
+  \item \texttt{EnvironmentalSnapshot}：含資料來源 \texttt{sourceType}/\texttt{sourceName}、空間尺度 \texttt{spatialReference}（\texttt{township | station | air-quality-area}）、觀測／預報與抓取時間、氣象與空品數值，以及 \texttt{qualityFlags}（\texttt{missing | stale | spatially-coarse | unavailable}）。
+  \item \texttt{SegmentDecision}：含 \texttt{segmentId}、\texttt{alerts}（\texttt{category}、\texttt{priority}、\texttt{recommendedAction}）、\texttt{evidence}（來源欄位、\texttt{ruleId}、偏好因子）與 \texttt{limitations}。
+  \item \texttt{FeedbackRecord} 與 \texttt{PreferenceUpdateCandidate}：分別記錄行後遭遇與有用性評分，以及狀態為 \texttt{pending-confirmation | accepted | rejected} 之偏好調整候選。
+\end{itemize}
+
+\subsection{領域規則與 LLM 責任邊界}
+規則引擎必須版本化並輸出每筆建議對應之 \texttt{ruleId} 與輸入證據，第一版涵蓋五類規則：降雨準備、紫外線防護、空品防護、冷熱舒適，以及資料品質降級規則。系統強制隔離健康防護與主觀舒適：使用者偏好僅能調整呈現優先級或舒適提醒門檻，不得刪除由官方資料觸發之重要防護提醒。
+
+相對地，LLM 僅限執行三項任務：（1）將自然語言行程補充轉為結構化欄位並要求確認不確定欄位；（2）依 \texttt{TripRecommendation} 改寫為易讀摘要；（3）回答「為什麼這樣建議？」，且僅能引用既有 \texttt{SegmentDecision.evidence} 與 \texttt{limitations}。LLM 嚴禁自行取得未記錄數值、修改警報優先級、將即時觀測寫成預報或對缺漏時段編造結論。
+
+\subsection{核心演算法流程}
+系統執行多站決策之完整邏輯如 Algorithm~\ref{alg:pwa_agent} 所示，確保在任何資料異常情況下優先退回受限決策（\texttt{createLimitedDecision}），並於彙整後確保高優先級健康防護提醒置於舒適提醒之前。
+
+\begin{algorithm}[t]
+  \caption{Personalized Weather Anchor Agent}
+  \label{alg:pwa_agent}
+  \begin{algorithmic}[1]
+    \Require User $U$, Itinerary $I$, Explicit Preferences $P$
+    \Ensure Trip Recommendation $TR$
+    \State Validate account $U$ and retrieve profile $P$
+    \State Validate every segment in $I$
+    \If{any segment lacks valid Taiwan location, time, or activity}
+      \State \Return request for missing or invalid fields
+    \EndIf
+    \State Normalize each segment into township, air-quality area, and window
+    \State $\textit{Decisions} \gets []$
+    \For{each normalized segment $S \in I$}
+      \State $\textit{Weather} \gets \text{retrieveCWAForecast}(S.\text{township}, S.\text{timeWindow})$
+      \If{$S$ is current or in progress}
+        \State $\textit{Air} \gets \text{retrieveNearestMoENVStation}(S.\text{lat}, S.\text{lon})$
+      \ElsIf{$S$ matches official next-day forecast}
+        \State $\textit{Air} \gets \text{retrieveMoENVForecast}(S.\text{airQualityArea}, S.\text{date})$
+      \Else
+        \State $\textit{Air} \gets \text{unavailable}(\text{``No official air-quality forecast''})$
+      \EndIf
+      \State $\textit{Snap} \gets \text{alignAndValidate}(\textit{Weather}, \textit{Air}, S)$
+      \If{$\textit{Snap}$ has critical \texttt{missing}, \texttt{stale}, or coarse flags}
+        \State $\textit{Dec} \gets \text{createLimitedDecision}(S, \textit{Snap}.\text{qualityFlags})$
+      \Else
+        \State $R \gets \text{evaluateRainRules}(\textit{Snap}, S, P.\text{rainTolerance})$
+        \State $V \gets \text{evaluateUVRules}(\textit{Snap}, S, P.\text{sunProtectionPriority})$
+        \State $A \gets \text{evaluateAirRules}(\textit{Snap}, S, P.\text{airQualityAlertSensitivity})$
+        \State $T \gets \text{evaluateThermalRules}(\textit{Snap}, S, P.\text{thermalPreference})$
+        \State $\textit{Dec} \gets \text{combineAlerts}(R, V, A, T)$
+        \State $\textit{Dec} \gets \text{attachEvidenceAndRuleIds}(\textit{Dec}, \textit{Snap}, P)$
+      \EndIf
+      \State Append $\textit{Dec}$ to $\textit{Decisions}$
+    \EndFor
+    \State $TR \gets \text{aggregateItineraryDecisions}(\textit{Decisions})$
+    \State $TR \gets \text{prioritizeCriticalProtectionBeforeComfort}(TR)$
+    \State $\text{persistDecisionRecord}(U, I, TR)$
+    \State $TR.\text{explanation} \gets \text{generateExplanationFromRecord}(TR)$
+    \State \Return $TR$
+  \end{algorithmic}
+\end{algorithm}
+
+\subsection{帳號、記憶與回饋機制}
+系統將「明確偏好」、「行程紀錄快照」與「行後回饋」三類資料彼此隔離保存。當累積多筆 \texttt{FeedbackRecord} 時，系統得產生 \texttt{PreferenceUpdateCandidate} 供使用者檢視證據摘要，惟有在使用者顯式接受後，方才建立新的 \texttt{confirmedPreferenceVersion}，藉此避免單次衣著或活動差異誤導長期個人模型。
+
+% ======================================================================
+\section{評估設計}
+% ======================================================================
+
+為客觀驗證混合式架構之實際效益並回應文獻對獨立評估之要求，本研究規劃三組對照基準、六類實務測試情境與五維度評估指標。
+
+\subsection{比較基準組}
+\begin{itemize}
+  \item \textbf{Baseline A（原始數值）}：僅呈現中央氣象署與環境部之官方天氣及 AQI 原始數值。
+  \item \textbf{Baseline B（固定規則＋模板）}：使用固定領域規則搭配靜態文字模板，不包含個人化權重與 LLM 追問能力。
+  \item \textbf{Proposed（混合式架構）}：結合版本化規則引擎、使用者明確偏好與受限邊界之 LLM 自然語言解釋。
+\end{itemize}
+
+\subsection{測試情境設計}
+測試案例涵蓋六項關鍵情境：（1）多站、跨鄉鎮與不同停留時段之複合行程；（2）存在降雨機率但使用者偏好不願攜帶雨具之成本權衡；（3）高 UVI 且伴隨長時間戶外活動；（4）相同 AQI 數值但分別由 PM$_{2.5}$ 與臭氧（O$_3$）主導之防護差異；（5）進行中測站觀測與隔日空品區預報之時段切換；（6）資料過期、缺漏或超出官方空品預報範圍之異常降級處理。
+
+\subsection{評估指標}
+各項指標如表~\ref{tab:evaluation_metrics} 所示，同時檢驗系統正確性、安全性與使用者可理解程度，避免僅以主觀文字親切度或滿意度掩蓋重要提醒遺漏之風險。
+
+\begin{table}[t]
+  \centering
+  \caption{系統評估指標分類一覽}
+  \label{tab:evaluation_metrics}
+  \begin{tabularx}{\columnwidth}{@{}l X@{}}
+    \toprule
+    \textbf{指標維度} & \textbf{具體衡量項目} \\
+    \midrule
+    正確性 & 建議是否可由保存之官方快照資料與規則版本完全重現 \\
+    完整性 & 重要防護提醒遺漏率、資料限制揭露率 \\
+    個人化 & 使用者對行後實際符合度與建議有用性之問卷評分 \\
+    可理解性 & 使用者能否準確說出建議對應之站點、時段與判斷依據 \\
+    系統性 & 官方 API 請求成功率、資料過期處理率、系統回應時間 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+% ======================================================================
+\section{結論與未來展望}
+% ======================================================================
+
+本文針對臺灣日常多站戶外行程規劃需求，提出結合中央氣象署與環境部開放資料之「個人化天氣助理」系統架構，透過「時空對齊 $\rightarrow$ 品質驗證 $\rightarrow$ 版本化規則判定 $\rightarrow$ 受限 LLM 解釋」之分層設計，在提供個人化行前建議的同時確保健康防護不被妥協且每項建議皆可追溯至原始官方資料與規則編號。此外，本專案亦導入 OpenSpec 規格驅動開發流程以固化模組介面與行為契約，未來將依循既定評估方案實作資料擷取介面（包含 MCP 工具封裝）並展開跨基準線之使用者與系統實測。
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}
